@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:,">
+    <title>Verifica a Quiz</title>
+
+    <!-- KaTeX: rendering delle formule LaTeX (serve connessione internet) -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            color: #333;
+            max-width: 600px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+        }
+        html { background-color: #f4f6f9; }
+        h2 { color: #2c3e50; text-align: center; }
+        .input-group { margin-bottom: 20px; }
+        .input-group label { display: block; margin-bottom: 8px; font-weight: bold; }
+        .input-group input {
+            width: 100%;
+            padding: 10px;
+            font-size: 1em;
+            box-sizing: border-box;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        .question-box { font-size: 1.1em; margin-bottom: 20px; font-weight: bold; }
+
+        /* Opzioni cliccabili sull'intera riga */
+        .options-list { list-style-type: none; padding: 0; }
+        .options-list li {
+            margin-bottom: 10px;
+            padding: 14px;
+            background: #ecf0f1;
+            border: 2px solid transparent;
+            border-radius: 5px;
+            cursor: pointer;
+            user-select: none;
+        }
+        /* hover solo su dispositivi con mouse (evita il grigio "appiccicato" su touch) */
+        @media (hover: hover) {
+            .options-list li:hover { background: #d5dbdb; }
+        }
+
+        /* Lampeggio di 500 ms alla selezione (2 lampeggi), poi torna normale */
+        @keyframes lampeggio {
+            0%, 50%, 100% { background: #ecf0f1; border-color: transparent; }
+            25%, 75%      { background: #aed6f1; border-color: #3498db; }
+        }
+        .options-list li.lampeggia { animation: lampeggio 0.5s linear; }
+
+        /* Timer */
+        #timer-box { margin-bottom: 15px; }
+        #timer-text { font-weight: bold; color: #2c3e50; margin-bottom: 5px; }
+        #timer-bar-bg { background: #ecf0f1; border-radius: 4px; height: 10px; overflow: hidden; }
+        #timer-bar { background: #27ae60; height: 100%; width: 100%; transition: width 1s linear, background 0.3s; }
+        #timer-box.urgente #timer-text { color: #c0392b; }
+        #timer-box.urgente #timer-bar { background: #c0392b; }
+
+        .btn-container { margin-top: 25px; display: flex; justify-content: space-between; }
+        button {
+            padding: 12px 20px;
+            font-size: 1em;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:not(:disabled):hover { background-color: #2980b9; }
+
+        /* Tasto conferma: grigio e non cliccabile finché non si sceglie un'opzione */
+        #btn-conferma:disabled {
+            background-color: #bdc3c7;
+            color: #ecf0f1;
+            cursor: not-allowed;
+        }
+
+        .alert-box {
+            background-color: #e67e22;
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            font-weight: bold;
+            text-align: center;
+        }
+        .hidden { display: none !important; }
+        #loading-screen { text-align: center; font-size: 1.2em; padding: 20px; }
+        #loading-container { text-align: center; }
+    </style>
+</head>
+<body>
+
+    <!-- SCHERMATA INIZIALE -->
+    <div id="login-container">
+        <h2>Accesso Verifica</h2>
+        <div class="input-group">
+            <label for="nome-studente">Nome e Cognome:</label>
+            <input type="text" id="nome-studente" placeholder="Inserisci il tuo nome e cognome">
+        </div>
+        <button onclick="iniziaQuiz()" style="width: 100%;">Inizia il Test</button>
+    </div>
+
+    <!-- SCHERMATA DEL QUIZ -->
+    <div id="quiz-container" class="hidden">
+        <div id="alert-notice" class="alert-box hidden">Attenzione: stai recuperando le domande che avevi saltato!</div>
+        <div id="progress" style="font-weight: bold; color: #7f8c8d; margin-bottom: 10px;"></div>
+        <div id="timer-box">
+            <div id="timer-text"></div>
+            <div id="timer-bar-bg"><div id="timer-bar"></div></div>
+        </div>
+        <hr style="border: 0; border-top: 1px solid #eee; margin-bottom: 20px;">
+        <div class="question-box" id="question-text">Caricamento...</div>
+        <ul class="options-list" id="options-list"></ul>
+
+        <div class="btn-container">
+            <button onclick="saltaDomanda()" style="background-color: #95a5a6;">Salta Domanda</button>
+            <button id="btn-conferma" onclick="confermaRisposta()" disabled>Conferma e Avanti</button>
+        </div>
+    </div>
+
+    <!-- SCHERMATA DI CARICAMENTO INVIO -->
+    <div id="loading-container" class="hidden">
+        <div id="loading-screen">Invio dei risultati in corso, attendi...</div>
+        <button id="retry-btn" class="hidden" onclick="inviaPayload()">Riprova l'invio</button>
+    </div>
+
+    <!-- SCHERMATA FINALE -->
+    <div id="result-container" class="hidden">
+        <h2>Test Completato</h2>
+        <p id="score-text" style="font-size: 1.2em; text-align: center; margin: 30px 0;"></p>
+        <p style="text-align: center; color: #27ae60; font-weight: bold;">I tuoi risultati sono stati registrati con successo. Puoi chiudere la pagina.</p>
+    </div>
+
+<script>
+    /* =====================================================================
+       IMPOSTAZIONI (di solito non serve modificarle)
+       ===================================================================== */
+    const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzWpEocAsAAzpHvFYqMswqH37Z9MkpmEHUIeUXLkQvXKOvLA12ctwbnzWfXFsadEIrg/exec";
+
+    // Tempo (in secondi) usato se una domanda non ha il campo "tempo"
+    const TEMPO_DEFAULT = 30;
+
+    // Punti assegnati se una domanda non ha il campo "punti"
+    const PUNTI_DEFAULT = 1;
+
+    // Cosa succede se il tempo scade e NON è stata scelta nessuna risposta:
+    //   true  -> la domanda va tra quelle "saltate" e ricompare alla fine (come Salta)
+    //   false -> la domanda viene registrata come sbagliata (TEMPO SCADUTO)
+    // Se invece è già stata selezionata una risposta, viene confermata in automatico.
+    const SCADUTO_VA_IN_RECUPERO = true;
+
+    // Durata del lampeggio dell'opzione scelta (ms). Se la cambi, aggiorna anche "0.5s" nel CSS (.lampeggia).
+    const DURATA_LAMPEGGIO_MS = 500;
+
+    // Tempo massimo (ms) di attesa per l'invio dei risultati prima di proporre "Riprova"
+    const TIMEOUT_INVIO_MS = 20000;
+
+
+    /* =====================================================================
+       ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+       ▼▼▼  INIZIO ZONA DOMANDE                                          ▼▼▼
+       ▼▼▼  Le domande stanno TRA le due righe "NON CANCELLARE QUESTA    ▼▼▼
+       ▼▼▼  RIGA" (che iniziano con @@). A mano: sostituisci quello     ▼▼▼
+       ▼▼▼  che c'è in mezzo col codice del Generatore. Oppure usa      ▼▼▼
+       ▼▼▼  aggiorna_domande.bat e fa tutto da solo.                    ▼▼▼
+       ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼ */
+
+    //@@DOMANDE-INIZIO@@  <-- NON CANCELLARE QUESTA RIGA
+    const databaseDomande = [
+        {
+            "domanda": "Quanto fa la derivata di x^2?",
+            "opzioni": [
+                "2x",
+                "x^2",
+                "2",
+                "x"
+            ],
+            "corretta": "2x",
+            "tempo": 30,
+            "tag": "analisi"
+        },
+        {
+            "domanda": "Qual è l'unità di misura della forza nel SI?",
+            "opzioni": [
+                "Watt",
+                "Newton",
+                "Joule",
+                "Pascal"
+            ],
+            "corretta": "Newton",
+            "tempo": 30,
+            "tag": "fisica"
+        },
+        {
+            "domanda": "Quanto vale l'accelerazione di gravità standard (circa)?",
+            "opzioni": [
+                "9.81 m/s^2",
+                "3.14 m/s^2",
+                "1.60 m/s^2",
+                "100 m/s^2"
+            ],
+            "corretta": "9.81 m/s^2",
+            "tempo": 30,
+            "tag": "fisica"
+        },
+        {
+            "domanda": "Qual è il logaritmo naturale di 1 (ln(1))?",
+            "opzioni": [
+                "1",
+                "0",
+                "e",
+                "Infinito"
+            ],
+            "corretta": "0",
+            "tempo": 30,
+            "tag": "algebra"
+        },
+        {
+            "domanda": "come si chiama il prof. di fisica",
+            "opzioni": [
+                "ciccio",
+                "giovanni",
+                "filippo",
+                "turiddeu"
+            ],
+            "corretta": "ciccio",
+            "tempo": 30,
+            "tag": ""
+        },
+        {
+            "domanda": "prova di modifica",
+            "opzioni": [
+                "1",
+                "2",
+                "3",
+                "4"
+            ],
+            "corretta": "1",
+            "tempo": 20,
+            "tag": ""
+        }
+    ];
+    //@@DOMANDE-FINE@@  <-- NON CANCELLARE QUESTA RIGA
+
+    /* ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+       ▲▲▲  FINE ZONA DOMANDE  (da qui in giù NON modificare niente)  ▲▲▲
+       ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ */
+
+
+    let nomeStudente = "";
+    let domandeMain = [];
+    let domandeSaltate = [];
+    let indiceCorrente = 0;
+    let inFaseRecupero = false;
+    let punteggio = 0;
+    let rispostaSelezionata = null;
+    let dettagliRisposte = [];
+    let payloadDaInviare = null;
+
+    let timerInterval = null;
+    let tempoRimasto = 0;
+    let tempoTotale = 0;
+
+    // Punti di una domanda (campo "punti", altrimenti PUNTI_DEFAULT)
+    function puntiDomanda(q) {
+        let p = Number(q.punti);
+        return p > 0 ? p : PUNTI_DEFAULT;
+    }
+
+    function totalePunti() {
+        return databaseDomande.reduce((somma, q) => somma + puntiDomanda(q), 0);
+    }
+
+    // Arrotonda a 2 decimali (evita 0.30000000000000004); separatore "." per l'invio, "," per lo schermo
+    function formattaPunti(n, virgola) {
+        let s = String(Math.round(n * 100) / 100);
+        return virgola ? s.replace(".", ",") : s;
+    }
+
+    function mescolaArray(array) {
+        let arr = [...array];
+        for (let i = arr.length - 1; i > 0; i--) {
+            let j = Math.floor(Math.random() * (i + 1));
+            [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
+    }
+
+    /* ---------- LATEX (KaTeX) ----------
+       Delimitatori supportati: $...$  \(...\)  $$...$$  \[...\]
+       Se KaTeX non è ancora caricato (o manca la connessione) il testo resta com'è. */
+    function renderMath(elemento) {
+        if (typeof renderMathInElement !== "function") return;
+        renderMathInElement(elemento, {
+            delimiters: [
+                { left: "$$", right: "$$", display: true },
+                { left: "\\[", right: "\\]", display: true },
+                { left: "\\(", right: "\\)", display: false },
+                { left: "$", right: "$", display: false }
+            ],
+            throwOnError: false
+        });
+    }
+
+    function iniziaQuiz() {
+        let inputNome = document.getElementById("nome-studente").value.trim();
+        if (inputNome === "") {
+            alert("Per favore, inserisci il tuo nome e cognome.");
+            return;
+        }
+        nomeStudente = inputNome;
+
+        domandeMain = mescolaArray(databaseDomande).map(q => ({
+            ...q,
+            opzioni: mescolaArray(q.opzioni)
+        }));
+
+        domandeSaltate = [];
+        indiceCorrente = 0;
+        inFaseRecupero = false;
+        punteggio = 0;
+        dettagliRisposte = [];
+
+        document.getElementById("login-container").classList.add("hidden");
+        document.getElementById("quiz-container").classList.remove("hidden");
+        caricaDomanda();
+    }
+
+    /* ---------- TIMER ---------- */
+    function fermaTimer() {
+        if (timerInterval !== null) {
+            clearInterval(timerInterval);
+            timerInterval = null;
+        }
+    }
+
+    function formattaTempo(s) {
+        let m = Math.floor(s / 60);
+        let sec = s % 60;
+        return String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0");
+    }
+
+    function aggiornaTimerUI() {
+        document.getElementById("timer-text").innerText = "⏱ Tempo rimasto: " + formattaTempo(tempoRimasto);
+        let perc = tempoTotale > 0 ? (tempoRimasto / tempoTotale) * 100 : 0;
+        document.getElementById("timer-bar").style.width = perc + "%";
+        document.getElementById("timer-box").classList.toggle("urgente", tempoRimasto <= 10);
+    }
+
+    function avviaTimer(secondi) {
+        fermaTimer();
+        tempoTotale = secondi;
+        tempoRimasto = secondi;
+
+        // reset barra senza animazione, poi si riattiva
+        let bar = document.getElementById("timer-bar");
+        bar.style.transition = "none";
+        aggiornaTimerUI();
+        void bar.offsetWidth;
+        bar.style.transition = "width 1s linear, background 0.3s";
+
+        timerInterval = setInterval(() => {
+            tempoRimasto--;
+            aggiornaTimerUI();
+            if (tempoRimasto <= 0) {
+                fermaTimer();
+                tempoScaduto();
+            }
+        }, 1000);
+    }
+
+    function tempoScaduto() {
+        if (rispostaSelezionata !== null) {
+            registraRisposta(rispostaSelezionata);      // conferma automatica
+        } else {
+            let q = domandaCorrente();
+            if (SCADUTO_VA_IN_RECUPERO && !inFaseRecupero) {
+                domandeSaltate.push(q);
+                avanti();
+            } else {
+                registraNonRisposta(q, "TEMPO SCADUTO");
+            }
+        }
+    }
+
+    /* ---------- DOMANDE ---------- */
+    function domandaCorrente() {
+        let listaCorrente = inFaseRecupero ? domandeSaltate : domandeMain;
+        return listaCorrente[indiceCorrente];
+    }
+
+    function caricaDomanda() {
+        let listaCorrente = inFaseRecupero ? domandeSaltate : domandeMain;
+
+        if (indiceCorrente >= listaCorrente.length) {
+            if (!inFaseRecupero && domandeSaltate.length > 0) {
+                inFaseRecupero = true;
+                domandeSaltate = mescolaArray(domandeSaltate);
+                indiceCorrente = 0;
+                document.getElementById("alert-notice").classList.remove("hidden");
+                caricaDomanda();
+                return;
+            } else {
+                inviaRisultati();
+                return;
+            }
+        }
+
+        let q = listaCorrente[indiceCorrente];
+        let boxDomanda = document.getElementById("question-text");
+        boxDomanda.textContent = q.domanda;
+        renderMath(boxDomanda);
+
+        let progressText = inFaseRecupero
+            ? `Recupero domande saltate: ${indiceCorrente + 1} di ${domandeSaltate.length}`
+            : `Domanda: ${indiceCorrente + 1} di ${domandeMain.length}`;
+        document.getElementById("progress").innerText = progressText;
+
+        // Le opzioni sono righe cliccabili (niente cerchietto).
+        // La scelta NON resta evidenziata: la riga lampeggia per DURATA_LAMPEGGIO_MS e torna normale.
+        let lista = document.getElementById("options-list");
+        lista.innerHTML = "";
+        rispostaSelezionata = null;
+        document.getElementById("btn-conferma").disabled = true;
+
+        q.opzioni.forEach((opzione) => {
+            let li = document.createElement("li");
+            li.textContent = opzione;
+            li.addEventListener("click", () => {
+                rispostaSelezionata = opzione;
+                document.getElementById("btn-conferma").disabled = false;
+                lampeggia(li);
+            });
+            lista.appendChild(li);
+            renderMath(li);
+        });
+
+        avviaTimer(Number(q.tempo) > 0 ? Number(q.tempo) : TEMPO_DEFAULT);
+    }
+
+    function lampeggia(li) {
+        li.classList.remove("lampeggia");
+        void li.offsetWidth;                 // riavvia l'animazione se si clicca di nuovo
+        li.classList.add("lampeggia");
+        setTimeout(() => li.classList.remove("lampeggia"), DURATA_LAMPEGGIO_MS);
+    }
+
+    function avanti() {
+        fermaTimer();
+        indiceCorrente++;
+        caricaDomanda();
+    }
+
+    function secondiUsati() {
+        return tempoTotale - tempoRimasto;
+    }
+
+    function registraRisposta(risposta) {
+        let q = domandaCorrente();
+        let esatta = (risposta === q.corretta);
+        let punti = puntiDomanda(q);
+        if (esatta) punteggio += punti;
+
+        dettagliRisposte.push({
+            tag: q.tag,
+            domanda: q.domanda,
+            rispostaData: risposta,
+            rispostaCorretta: q.corretta,
+            corretto: esatta,
+            punti: punti,
+            puntiOttenuti: esatta ? punti : 0,
+            eraSaltata: inFaseRecupero,
+            secondiUsati: secondiUsati()
+        });
+        avanti();
+    }
+
+    function registraNonRisposta(q, motivo) {
+        dettagliRisposte.push({
+            tag: q.tag,
+            domanda: q.domanda,
+            rispostaData: motivo,
+            rispostaCorretta: q.corretta,
+            corretto: false,
+            punti: puntiDomanda(q),
+            puntiOttenuti: 0,
+            eraSaltata: true,
+            secondiUsati: secondiUsati()
+        });
+        avanti();
+    }
+
+    function confermaRisposta() {
+        if (rispostaSelezionata === null) return;   // il tasto è comunque disattivato
+        registraRisposta(rispostaSelezionata);
+    }
+
+    function saltaDomanda() {
+        let q = domandaCorrente();
+        if (!inFaseRecupero) {
+            domandeSaltate.push(q);
+            avanti();
+        } else {
+            registraNonRisposta(q, "SALTATA");
+        }
+    }
+
+    /* ---------- INVIO RISULTATI ---------- */
+    function inviaRisultati() {
+        fermaTimer();
+        document.getElementById("quiz-container").classList.add("hidden");
+        document.getElementById("loading-container").classList.remove("hidden");
+
+        payloadDaInviare = {
+            studente: nomeStudente,
+            punteggio: `${formattaPunti(punteggio, false)} / ${formattaPunti(totalePunti(), false)}`,
+            dettagli: dettagliRisposte
+        };
+        inviaPayload();
+    }
+
+    // Invio con fetch in modalità no-cors: la Web App riceve gli stessi dati di prima
+    // (campo "data" in POST), ma senza iframe nascosto, quindi niente errore rosso in console.
+    // Se la rete non risponde compare il tasto "Riprova l'invio".
+    function inviaPayload() {
+        let msg = document.getElementById("loading-screen");
+        let retry = document.getElementById("retry-btn");
+        msg.innerText = "Invio dei risultati in corso, attendi...";
+        retry.classList.add("hidden");
+
+        let body = new URLSearchParams();
+        body.append("data", JSON.stringify(payloadDaInviare));
+
+        let controller = new AbortController();
+        let to = setTimeout(() => controller.abort(), TIMEOUT_INVIO_MS);
+
+        fetch(GOOGLE_SCRIPT_URL, {
+            method: "POST",
+            mode: "no-cors",
+            body: body,
+            signal: controller.signal
+        })
+        .then(() => {
+            clearTimeout(to);
+            mostraRisultatoFinale();
+        })
+        .catch(() => {
+            clearTimeout(to);
+            msg.innerText = "Invio non riuscito. Controlla la connessione e riprova (non chiudere la pagina).";
+            retry.classList.remove("hidden");
+        });
+    }
+
+    function mostraRisultatoFinale() {
+        document.getElementById("loading-container").classList.add("hidden");
+        document.getElementById("result-container").classList.remove("hidden");
+        document.getElementById("score-text").innerText =
+            `${nomeStudente}, il tuo punteggio finale è: ${formattaPunti(punteggio, true)} / ${formattaPunti(totalePunti(), true)}`;
+    }
+</script>
+</body>
+</html>
