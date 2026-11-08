@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Gestione quiz</title>
+<style>
+    body { font-family: Arial, sans-serif; max-width: 480px; margin: 20px auto; padding: 16px; color: #333; background: #f4f6f9; }
+    .box { background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.1); padding: 16px; margin-bottom: 16px; }
+    h1 { font-size: 1.3em; text-align: center; color: #2c3e50; margin-top: 0; }
+    label { display: block; font-weight: bold; margin: 12px 0 4px; }
+    input[type=text], input[type=password], input[type=file] { width: 100%; box-sizing: border-box; padding: 10px; font-size: 1em; border: 1px solid #ccc; border-radius: 4px; }
+    button { width: 100%; padding: 14px; font-size: 1.05em; border: none; border-radius: 6px; color: #fff; margin-top: 12px; cursor: pointer; }
+    #btn-pubblica { background: #27ae60; }
+    #btn-ritira { background: #c0392b; }
+    button:disabled { background: #bdc3c7; cursor: not-allowed; }
+    #esito { white-space: pre-wrap; margin-top: 12px; font-weight: bold; word-break: break-word; }
+    .ok { color: #27ae60; }
+    .err { color: #c0392b; }
+    small { color: #7f8c8d; }
+</style>
+</head>
+<body>
+
+<h1>Gestione quiz su GitHub</h1>
+
+<div class="box">
+    <label for="token">Token GitHub</label>
+    <input type="password" id="token" placeholder="github_pat_..." autocomplete="off">
+    <small>Si salva solo su questo telefono, nel browser.</small>
+
+    <label for="utente">Utente GitHub</label>
+    <input type="text" id="utente" autocapitalize="none" autocorrect="off">
+
+    <label for="repo">Repository</label>
+    <input type="text" id="repo" autocapitalize="none" autocorrect="off">
+
+    <label for="nomefile">Nome del file online</label>
+    <input type="text" id="nomefile" autocapitalize="none" autocorrect="off">
+</div>
+
+<div class="box">
+    <label for="file">File del quiz (index.html)</label>
+    <input type="file" id="file" accept=".html,text/html">
+    <button id="btn-pubblica">Pubblica il quiz</button>
+    <button id="btn-ritira">Ritira il quiz</button>
+    <div id="esito"></div>
+</div>
+
+<script>
+    const $ = id => document.getElementById(id);
+    const MEM = "gestioneQuiz_";
+
+    function leggi(k) { try { return localStorage.getItem(MEM + k) || ""; } catch (e) { return ""; } }
+    function scrivi(k, v) { try { localStorage.setItem(MEM + k, v); } catch (e) { } }
+    function togli(k) { try { localStorage.removeItem(MEM + k); } catch (e) { } }
+
+    // Valori di partenza: quelli salvati, altrimenti dedotti dall'indirizzo della pagina (utente.github.io/repo/)
+    const suGithub = location.hostname.endsWith(".github.io");
+    $("token").value = leggi("token");
+    $("utente").value = leggi("utente") || (suGithub ? location.hostname.split(".")[0] : "sercik");
+    $("repo").value = leggi("repo") || (suGithub ? location.pathname.split("/")[1] || "quiz" : "quiz");
+    $("nomefile").value = leggi("nomefile") || "index.html";
+
+    function esito(msg, ok) {
+        const e = $("esito");
+        e.textContent = msg;
+        e.className = ok ? "ok" : "err";
+    }
+
+    function occupato(si) {
+        $("btn-pubblica").disabled = si;
+        $("btn-ritira").disabled = si;
+    }
+
+    function controlla() {
+        const campi = ["token", "utente", "repo", "nomefile"];
+        if (campi.some(c => !$(c).value.trim())) {
+            esito("Compila token, utente, repository e nome del file.", false);
+            return false;
+        }
+        campi.forEach(c => scrivi(c, $(c).value.trim()));
+        return true;
+    }
+
+    function indirizzo() {
+        return "https://api.github.com/repos/" +
+            encodeURIComponent($("utente").value.trim()) + "/" +
+            encodeURIComponent($("repo").value.trim()) + "/contents/" +
+            $("nomefile").value.trim().split("/").map(encodeURIComponent).join("/");
+    }
+
+    function chiama(metodo, corpo) {
+        const intest = {
+            "Authorization": "Bearer " + $("token").value.trim(),
+            "Accept": "application/vnd.github+json"
+        };
+        if (corpo) intest["Content-Type"] = "application/json";
+        return fetch(indirizzo(), {
+            method: metodo,
+            headers: intest,
+            body: corpo ? JSON.stringify(corpo) : undefined
+        });
+    }
+
+    // Restituisce il codice "sha" del file online, oppure null se non c'è
+    async function leggiSha() {
+        const r = await chiama("GET");
+        if (r.status === 404) return null;
+        if (!r.ok) throw r;
+        return (await r.json()).sha;
+    }
+
+    function descriviErrore(e) {
+        if (e instanceof Response) {
+            if (e.status === 401) {
+                togli("token");
+                $("token").value = "";
+                return "Token non valido o scaduto: incollane uno nuovo.";
+            }
+            if (e.status === 403 || e.status === 404) {
+                return "GitHub rifiuta l'operazione (codice " + e.status + "). Controlla utente, repository e che il token abbia il permesso Contents: Read and write.";
+            }
+            return "Errore di GitHub (codice " + e.status + ").";
+        }
+        return "Errore: " + (e && e.message ? e.message : e);
+    }
+
+    function leggiFileBase64(file) {
+        return new Promise((ok, ko) => {
+            const lettore = new FileReader();
+            lettore.onload = () => ok(String(lettore.result).split(",")[1]);
+            lettore.onerror = () => ko(new Error("Non riesco a leggere il file."));
+            lettore.readAsDataURL(file);
+        });
+    }
+
+    $("btn-pubblica").onclick = async () => {
+        if (!controlla()) return;
+        const file = $("file").files[0];
+        if (!file) { esito("Scegli prima il file del quiz.", false); return; }
+        occupato(true);
+        esito("Carico il quiz...", true);
+        try {
+            const contenuto = await leggiFileBase64(file);
+            const sha = await leggiSha();
+            const corpo = { message: "Pubblica il quiz", content: contenuto };
+            if (sha) corpo.sha = sha;
+            const r = await chiama("PUT", corpo);
+            if (!r.ok) throw r;
+            esito("Fatto! Il quiz è stato caricato.\nLa pagina si aggiorna in uno-due minuti:\nhttps://" +
+                $("utente").value.trim() + ".github.io/" + $("repo").value.trim() + "/", true);
+        } catch (e) {
+            esito(descriviErrore(e), false);
+        }
+        occupato(false);
+    };
+
+    $("btn-ritira").onclick = async () => {
+        if (!controlla()) return;
+        if (!confirm("Ritirare il quiz da GitHub?")) return;
+        occupato(true);
+        esito("Ritiro il quiz...", true);
+        try {
+            const sha = await leggiSha();
+            if (!sha) {
+                esito("Il file non risulta online: non c'è niente da ritirare.", true);
+            } else {
+                const r = await chiama("DELETE", { message: "Ritira il quiz", sha: sha });
+                if (!r.ok) throw r;
+                esito("Fatto! Il quiz è stato cancellato da GitHub.\nLa pagina smette di funzionare in uno-due minuti.", true);
+            }
+        } catch (e) {
+            esito(descriviErrore(e), false);
+        }
+        occupato(false);
+    };
+</script>
+</body>
+</html>
